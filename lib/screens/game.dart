@@ -1,12 +1,12 @@
 import 'dart:developer';
 
-import 'package:flutter/src/foundation/key.dart';
-import 'package:flutter/src/widgets/framework.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
 import 'package:platform_channel_game/constants/colors.dart';
 import 'package:platform_channel_game/constants/styles.dart';
 import 'package:platform_channel_game/models/creator.dart';
+import 'package:platform_channel_game/models/message.dart';
 
 class GameWidget extends StatefulWidget {
   const GameWidget({Key? key}) : super(key: key);
@@ -16,6 +16,8 @@ class GameWidget extends StatefulWidget {
 }
 
 class _GameWidgetState extends State<GameWidget> {
+  static const platform = MethodChannel('game/exchange');
+
   Creator?  creator;
   bool myTurn = false;
 
@@ -24,6 +26,31 @@ class _GameWidgetState extends State<GameWidget> {
     [0, 0, 0],
     [0, 0, 0],
   ];
+
+  @override
+  void initState(){
+    super.initState();
+    configurePubNub();
+  }
+
+  void configurePubNub(){
+    platform.setMethodCallHandler((call) async {
+      String action = call.method;
+      String arguments = call.arguments.toString();
+      List<String> parts = arguments.split("|");
+
+      if (action == "sendAction") {
+        ExchangeMessage message = ExchangeMessage(parts[0], int.parse(parts[1]), int.parse(parts[2]));
+        if(message.user == (creator!.creator? "p2": "p1")) {
+          setState(() {
+            myTurn = true;
+            cells[message.x][message.y] = 2;
+          });
+          checkWinner();
+        } 
+      }
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -143,12 +170,13 @@ class _GameWidgetState extends State<GameWidget> {
               child: const Text("Jogar"),
               onPressed: () {
                 Navigator.of(context).pop();
-                setState(() {
-                  creator = Creator(owner, controller.text);
-                  myTurn = owner;
-                });
-                _sendAction('subscribe', {'channel': controller.text});
-                //.then((value))
+                _sendAction('subscribe', {'channel': controller.text})
+                  .then((value){
+                    setState(() {
+                      creator = Creator(owner, controller.text);
+                      myTurn = owner;
+                    });
+                  });
               },
             )
           ],
@@ -156,8 +184,14 @@ class _GameWidgetState extends State<GameWidget> {
     });
   }
 
-  Future _sendAction(String action, Map<String, dynamic> arguments) async {
-    log('$action $arguments');
+  Future<bool> _sendAction(String action, Map<String, dynamic> arguments) async {
+    try {
+      final bool result = await platform.invokeMethod(action, arguments);
+      if(result) {
+        return true;
+      }
+    } catch(e) {}
+    return false;
   }
 
   Widget getCell(int x, int y) => InkWell(
@@ -165,34 +199,52 @@ class _GameWidgetState extends State<GameWidget> {
       padding: const EdgeInsets.all(8),
       color: Colors.lightBlueAccent,
       child: Center(
-        child: Text(cells[x][y] == 0 ? "" : cells[x][y] == 1 ? "X": "O")
+        child: Text(
+          cells[x][y] == 0
+            ? ""
+            : cells[x][y] == 1
+              ? "X"
+              : "O",
+          style: textStyle76,
+        )
       ),
     ),
     onTap: () async {
       if (myTurn == true && cells[x][y] == 0) {
-        // _showSendingAction();
-        // _sendAction(
-        //   "sendAction",
-        //   {"tap": '${creator!.creator ? "p1" : "p2"}|$x|$y'}
-        // );
-        //then((value))
-        // Navigator.of(context).pop();
-        setState(() {
-          myTurn = false;
-          cells[x][y] = 1;
+        _showSendingAction();
+        _sendAction(
+          'sendAction',
+          {'tap': '${creator!.creator ? "p1" : "p2"}|$x|$y'}
+        ).then((value) {
+          // Navigator.of(context).pop();
+          setState(() {
+            myTurn = false;
+            cells[x][y] = 1;
+          });
+  
+          checkWinner();
         });
 
-        // checkWinner();
       } 
     },
   );
 
   void _showSendingAction() {}
-  void checkWinner(){}
+  void checkWinner(){
+    bool youWin = false;
+    bool enemyWin = false;
+
+    if(cells[0][0] == 1 && cells[0][0] == 1 && cells[0][0] == 1) {
+      youWin = true;
+    } else if(cells[0][0] == 1 && cells[0][0] == 1 && cells[0][0] == 2) {
+      enemyWin = true;
+    }
+  }
   void _sendMessage() async {
     TextEditingController controller = TextEditingController();
     return showDialog(
       context: context,
+      barrierDismissible: true,
       builder: (BuildContext context) {
         return AlertDialog(
           title: const Text("Digite a mensage para enviar"),
@@ -203,7 +255,7 @@ class _GameWidgetState extends State<GameWidget> {
                 Navigator.of(context).pop();
                 _sendAction("chat", {"message": '${creator!.creator ?"p1": "p2"}|${controller.text}'}); 
               },
-              child: const Text("Enviar")
+              child: const Text("Enviar"),
             )
           ],
         );
